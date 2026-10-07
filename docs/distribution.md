@@ -164,8 +164,9 @@ address, the first up, non-loopback interface with a usable IPv4 wins.
 For a manual helper run, append `-ip <lan-ip>` to the normal `serve`
 arguments, replacing `<lan-ip>` with the Mac's address on the TV's LAN.
 The override rejects malformed, IPv6, loopback, link-local and unassigned
-addresses. It checks local assignment, not reachability — use an active
-interface the TV can reach. The server still listens on `0.0.0.0`;
+addresses, and addresses on down interfaces. It checks local assignment and
+interface state, not reachability — use an interface the TV can reach.
+The server still listens on `0.0.0.0`;
 the flag only changes the advertised host. The plugin has no UI setting for it.
 
 ## The ffmpeg build

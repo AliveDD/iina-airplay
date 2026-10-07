@@ -92,3 +92,15 @@ func TestValidateIPOverride(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateIPOverrideRejectsDownInterface(t *testing.T) {
+	iface := testInterface(t, "en0", "192.168.50.10/24")
+	iface.flags &^= net.FlagUp
+	got, err := validateIPOverride("192.168.50.10", []interfaceInfo{iface})
+	if err == nil || !strings.Contains(err.Error(), "interface en0 is down") {
+		t.Fatalf("expected a down-interface error, got IP %q, err %v", got, err)
+	}
+	if got != "" {
+		t.Errorf("rejected override returned IP %q", got)
+	}
+}
