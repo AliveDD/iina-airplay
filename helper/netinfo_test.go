@@ -2,6 +2,7 @@ package main
 
 import (
 	"net"
+	"strings"
 	"testing"
 )
 
@@ -11,6 +12,10 @@ func mustCIDR(t *testing.T, s string) net.Addr {
 		t.Fatal(err)
 	}
 	return &net.IPNet{IP: ip, Mask: n.Mask}
+}
+
+func testInterface(t *testing.T, name, cidr string) interfaceInfo {
+	return interfaceInfo{name: name, flags: net.FlagUp, addrs: []net.Addr{mustCIDR(t, cidr)}}
 }
 
 func TestPickIPv4(t *testing.T) {
@@ -31,32 +36,59 @@ func TestPickIPv4(t *testing.T) {
 }
 
 func TestChooseLanIP(t *testing.T) {
-	walk := func(ips ...string) func() string {
-		return func() string {
-			if len(ips) == 0 {
-				return ""
-			}
-			return ips[0]
-		}
-	}
 	cases := []struct {
-		name  string
-		route net.IP
-		walk  func() string
-		want  string
+		name   string
+		route  net.IP
+		ifaces []interfaceInfo
+		want   string
 	}{
-		// The whole point of the issue: a VPN/bridge interface sorts first,
-		// but the kernel routes off-LAN traffic through the Wi-Fi address.
-		{"default route beats earlier-indexed interface", net.ParseIP("192.168.1.18"), walk("10.8.0.2", "192.168.1.18"), "192.168.1.18"},
-		{"no default route falls back to walk", nil, walk("10.8.0.2"), "10.8.0.2"},
-		{"loopback route falls back to walk", net.ParseIP("127.0.0.1"), walk("192.168.1.18"), "192.168.1.18"},
-		{"link-local route falls back to walk", net.ParseIP("169.254.10.1"), walk("192.168.1.18"), "192.168.1.18"},
-		{"v6 route falls back to walk", net.ParseIP("2001:db8::1"), walk("192.168.1.18"), "192.168.1.18"},
-		{"nothing anywhere is empty", nil, walk(), ""},
+		{
+			"default route beats earlier-indexed interface",
+			net.ParseIP("192.168.1.18"),
+			[]interfaceInfo{testInterface(t, "bridge100", "10.8.0.2/24"), testInterface(t, "en0", "192.168.1.18/24")},
+			"192.168.1.18",
+		},
+		{
+			"utun default route prefers physical private address",
+			net.ParseIP("10.9.0.2"),
+			[]interfaceInfo{testInterface(t, "utun0", "10.9.0.2/32"), testInterface(t, "en0", "192.168.50.10/24")},
+			"192.168.50.10",
+		},
+		{
+			"utun route ignores public physical address",
+			net.ParseIP("10.9.0.2"),
+			[]interfaceInfo{testInterface(t, "utun0", "10.9.0.2/32"), testInterface(t, "en0", "203.0.113.2/24")},
+			"10.9.0.2",
+		},
+		{
+			"non-utun private route stays preferred",
+			net.ParseIP("10.8.0.2"),
+			[]interfaceInfo{testInterface(t, "bridge100", "10.8.0.2/24"), testInterface(t, "en0", "192.168.1.18/24")},
+			"10.8.0.2",
+		},
+		{"no default route falls back to walk", nil, []interfaceInfo{testInterface(t, "en0", "192.168.1.18/24")}, "192.168.1.18"},
+		{"loopback route falls back to walk", net.ParseIP("127.0.0.1"), []interfaceInfo{testInterface(t, "en0", "192.168.1.18/24")}, "192.168.1.18"},
+		{"link-local route falls back to walk", net.ParseIP("169.254.10.1"), []interfaceInfo{testInterface(t, "en0", "192.168.1.18/24")}, "192.168.1.18"},
+		{"v6 route falls back to walk", net.ParseIP("2001:db8::1"), []interfaceInfo{testInterface(t, "en0", "192.168.1.18/24")}, "192.168.1.18"},
+		{"nothing anywhere is empty", nil, nil, ""},
 	}
 	for _, c := range cases {
-		if got := chooseLanIP(c.route, c.walk); got != c.want {
-			t.Errorf("%s: got %q want %q", c.name, got, c.want)
+		t.Run(c.name, func(t *testing.T) {
+			if got := chooseLanIP(c.route, c.ifaces); got != c.want {
+				t.Errorf("got %q want %q", got, c.want)
+			}
+		})
+	}
+}
+
+func TestValidateIPOverride(t *testing.T) {
+	ifaces := []interfaceInfo{testInterface(t, "en0", "192.168.50.10/24")}
+	if got, err := validateIPOverride("192.168.50.10", ifaces); err != nil || got != "192.168.50.10" {
+		t.Fatalf("valid override: got %q, err %v", got, err)
+	}
+	for _, override := range []string{"not-an-ip", "127.0.0.1", "192.168.50.11"} {
+		if _, err := validateIPOverride(override, ifaces); err == nil || !strings.Contains(err.Error(), "override") {
+			t.Errorf("override %q: expected validation error, got %v", override, err)
 		}
 	}
 }
